@@ -1,0 +1,44 @@
+# Large dataset folders - DON'T push to GitHub
+Original_Datasets/
+Processed_Datasets/
+Patches/
+checkpoints/
+visualizations/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model checkpoints and results
+*.pt
+*.pth
+*.h5
+*.json
+*.npy
+
+# Logs
+*.log
+
+# Original paper code (optional - you can keep or remove)
+wacv_paper-main/
