@@ -68,8 +68,8 @@ class NucleiDataset(Dataset):
         high_tensor = TF.normalize(high_tensor, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         low_tensor = TF.normalize(low_tensor, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         
-        # Normalize mask to [0, 1] (binary)
-        mask_tensor = mask_tensor.float() / 255.0
+        # Convert mask to integer class labels (0 or 1)
+        mask_tensor = (mask_tensor > 0).long().squeeze(0)
         
         return {
             'A': high_tensor,      # High-fidelity image
