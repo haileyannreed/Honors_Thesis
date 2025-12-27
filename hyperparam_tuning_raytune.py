@@ -286,7 +286,7 @@ def CDTrainer(config, checkpoint_dir=None):
             "accuracy": val_scores['accuracy'],
         }
 
-        # Save checkpoint to temporary directory (new Ray Tune API)
+        # Save checkpoint to temporary directory (Ray Tune API)
         import tempfile
         import ray.cloudpickle as pickle
 
@@ -301,7 +301,8 @@ def CDTrainer(config, checkpoint_dir=None):
                 pickle.dump(checkpoint_data, f)
 
             checkpoint = Checkpoint.from_directory(checkpoint_dir)
-            train.report(metrics, checkpoint=checkpoint)
+            # Use tune.report instead of train.report when called from Ray Tune
+            tune.report(metrics, checkpoint=checkpoint)
 
 
 def main(num_samples=20, max_num_epochs=500, gpus_per_trial=1):
