@@ -354,6 +354,7 @@ def main(num_samples=20, max_num_epochs=500, gpus_per_trial=1):
                 checkpoint_score_attribute="f1",
                 num_to_keep=2,
             ),
+            verbose=1,
         ),
     )
 
