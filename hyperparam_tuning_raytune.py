@@ -108,10 +108,10 @@ def train_epoch(model, dataloader, optimizer, criterion, device):
     running_loss = 0.0
     metric_tracker = MetricTracker(n_classes=Config.N_CLASSES)
 
-    for batch_idx, (img_high, img_low, mask) in enumerate(dataloader):
-        img_high = img_high.to(device)
-        img_low = img_low.to(device)
-        mask = mask.to(device)
+    for batch_idx, batch in enumerate(dataloader):
+        img_high = batch['A'].to(device)
+        img_low = batch['B'].to(device)
+        mask = batch['L'].to(device)
 
         optimizer.zero_grad()
 
@@ -140,10 +140,10 @@ def validate(model, dataloader, criterion, device):
     metric_tracker = MetricTracker(n_classes=Config.N_CLASSES)
 
     with torch.no_grad():
-        for batch_idx, (img_high, img_low, mask) in enumerate(dataloader):
-            img_high = img_high.to(device)
-            img_low = img_low.to(device)
-            mask = mask.to(device)
+        for batch_idx, batch in enumerate(dataloader):
+            img_high = batch['A'].to(device)
+            img_low = batch['B'].to(device)
+            mask = batch['L'].to(device)
 
             # Forward pass
             pred = model(img_high, img_low)
@@ -164,8 +164,8 @@ def calculate_class_weights(dataloader, device):
     print("Calculating class weights from training data...")
     class_counts = torch.zeros(Config.N_CLASSES, device=device)
 
-    for _, _, mask in dataloader:
-        mask = mask.to(device)
+    for batch in dataloader:
+        mask = batch['L'].to(device)
         for c in range(Config.N_CLASSES):
             class_counts[c] += (mask == c).sum()
 
