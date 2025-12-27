@@ -65,8 +65,8 @@ class Config:
     OUTPUT_FILE = BASE_DIR / f'best_hyperparams_{DATASET}_{MODEL_TYPE}.json'
 
 
-def get_model(model_type):
-    """Get model based on type"""
+def get_model(model_type, skip_mode='high'):
+    """Get model based on type and skip_mode (for latent_diff)"""
     if model_type == 'semi_siamese':
         return Semi_siamese_(
             in_channels=Config.IN_CHANNELS,
@@ -87,7 +87,8 @@ def get_model(model_type):
         return LatentDiffUNet(
             in_channels=Config.IN_CHANNELS,
             out_channels=Config.OUT_CHANNELS,
-            init_features=Config.INIT_FEATURES
+            init_features=Config.INIT_FEATURES,
+            skip_mode=skip_mode  # Support configurable skip connections
         )
     else:
         raise ValueError(f"Unknown model type: {model_type}")
@@ -173,7 +174,13 @@ def objective(trial):
     weight_decay = trial.suggest_float('wd', 1e-6, 1e-2, log=True)
     batch_size = trial.suggest_categorical('batch_size', [4, 8, 16])
 
-    print(f"\nTrial {trial.number}: lr={lr:.6f}, wd={weight_decay:.6f}, batch_size={batch_size}")
+    # Add skip_mode tuning for latent_diff model
+    skip_mode = 'high'  # default for other models
+    if MODEL_TYPE == 'latent_diff':
+        skip_mode = trial.suggest_categorical('skip_mode', ['high', 'low', 'both', 'avg'])
+        print(f"\nTrial {trial.number}: lr={lr:.6f}, wd={weight_decay:.6f}, batch_size={batch_size}, skip_mode={skip_mode}")
+    else:
+        print(f"\nTrial {trial.number}: lr={lr:.6f}, wd={weight_decay:.6f}, batch_size={batch_size}")
 
     # Create datasets
     train_dataset = NucleiDataset(
@@ -192,8 +199,8 @@ def objective(trial):
     # Calculate alpha weights
     alpha = get_alpha_weights(train_loader)
 
-    # Create model
-    model = get_model(MODEL_TYPE)
+    # Create model with skip_mode parameter
+    model = get_model(MODEL_TYPE, skip_mode=skip_mode)
 
     if torch.cuda.device_count() > 1:
         model = nn.DataParallel(model)
@@ -261,6 +268,10 @@ def main():
         'best_f1_1': study.best_value,
         'trial_number': study.best_trial.number
     }
+
+    # Add skip_mode to saved params if using latent_diff
+    if MODEL_TYPE == 'latent_diff':
+        best_params['skip_mode'] = study.best_params['skip_mode']
 
     with open(Config.OUTPUT_FILE, 'w') as f:
         json.dump(best_params, f, indent=4)

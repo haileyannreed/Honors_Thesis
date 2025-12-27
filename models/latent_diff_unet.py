@@ -1,10 +1,12 @@
 """
-Latent Difference U-Net
+Latent Difference U-Net with Configurable Skip Connections
 Novel architecture: Separate encoders → Latent difference → Shared decoder
 
-High → Encoder1 ─┐
-                  ├→ Difference (in latent space) → Shared Decoder → Segmentation
-Low  → Encoder2 ─┘
+Supports 4 skip connection modes for ablation study:
+- 'high': Use high-fidelity encoder skips (most intuitive)
+- 'low': Use low-fidelity encoder skips
+- 'both': Concatenate both high and low skips (most expressive)
+- 'avg': Average high and low skips
 """
 
 import torch
@@ -16,57 +18,85 @@ class LatentDiffUNet(nn.Module):
     """
     Dual-encoder architecture with latent space difference fusion.
 
-    Unlike Semi-Siamese (which differences decoder outputs),
-    this model differences encoder outputs in the latent space.
-
     Args:
         in_channels: Input image channels (default 3)
         out_channels: Output segmentation classes (default 2)
         init_features: Initial feature channels (default 32)
+        skip_mode: Skip connection mode - 'high', 'low', 'both', or 'avg' (default 'high')
     """
 
-    def __init__(self, in_channels=3, out_channels=2, init_features=32):
+    def __init__(self, in_channels=3, out_channels=2, init_features=32, skip_mode='high'):
         super(LatentDiffUNet, self).__init__()
 
+        assert skip_mode in ['high', 'low', 'both', 'avg'], \
+            "skip_mode must be one of: 'high', 'low', 'both', 'avg'"
+
+        self.skip_mode = skip_mode
         features = init_features
 
-        # Separate encoders for high and low fidelity
-        self.encoder1_high = self._make_encoder_block(in_channels, features, "high_enc1")
+        # HIGH-FIDELITY ENCODER
+        self.encoder1_high = self._make_block(in_channels, features, "high_enc1")
         self.pool1_high = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.encoder2_high = self._make_encoder_block(features, features * 2, "high_enc2")
+        self.encoder2_high = self._make_block(features, features * 2, "high_enc2")
         self.pool2_high = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.encoder3_high = self._make_encoder_block(features * 2, features * 4, "high_enc3")
+        self.encoder3_high = self._make_block(features * 2, features * 4, "high_enc3")
         self.pool3_high = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.encoder4_high = self._make_encoder_block(features * 4, features * 8, "high_enc4")
+        self.encoder4_high = self._make_block(features * 4, features * 8, "high_enc4")
         self.pool4_high = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.encoder1_low = self._make_encoder_block(in_channels, features, "low_enc1")
+        # LOW-FIDELITY ENCODER
+        self.encoder1_low = self._make_block(in_channels, features, "low_enc1")
         self.pool1_low = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.encoder2_low = self._make_encoder_block(features, features * 2, "low_enc2")
+        self.encoder2_low = self._make_block(features, features * 2, "low_enc2")
         self.pool2_low = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.encoder3_low = self._make_encoder_block(features * 2, features * 4, "low_enc3")
+        self.encoder3_low = self._make_block(features * 2, features * 4, "low_enc3")
         self.pool3_low = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.encoder4_low = self._make_encoder_block(features * 4, features * 8, "low_enc4")
+        self.encoder4_low = self._make_block(features * 4, features * 8, "low_enc4")
         self.pool4_low = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        # Bottleneck processes the difference
-        self.bottleneck = self._make_encoder_block(features * 8, features * 16, "bottleneck")
+        # BOTTLENECK processes the latent difference
+        self.bottleneck = self._make_block(features * 8, features * 16, "bottleneck")
 
-        # Shared decoder
+        # SHARED DECODER
+        # Decoder input channels depend on skip_mode
+        skip_multiplier = 3 if skip_mode == 'both' else 2  # both=3x, others=2x
+
         self.upconv4 = nn.ConvTranspose2d(features * 16, features * 8, kernel_size=2, stride=2)
-        self.decoder4 = self._make_encoder_block((features * 8) * 2, features * 8, "dec4")
+        self.decoder4 = self._make_block(features * 8 * skip_multiplier, features * 8, "dec4")
 
         self.upconv3 = nn.ConvTranspose2d(features * 8, features * 4, kernel_size=2, stride=2)
-        self.decoder3 = self._make_encoder_block((features * 4) * 2, features * 4, "dec3")
+        self.decoder3 = self._make_block(features * 4 * skip_multiplier, features * 4, "dec3")
 
         self.upconv2 = nn.ConvTranspose2d(features * 4, features * 2, kernel_size=2, stride=2)
-        self.decoder2 = self._make_encoder_block((features * 2) * 2, features * 2, "dec2")
+        self.decoder2 = self._make_block(features * 2 * skip_multiplier, features * 2, "dec2")
 
         self.upconv1 = nn.ConvTranspose2d(features * 2, features, kernel_size=2, stride=2)
-        self.decoder1 = self._make_encoder_block(features * 2, features, "dec1")
+        self.decoder1 = self._make_block(features * skip_multiplier, features, "dec1")
 
         # Final segmentation head
         self.conv_final = nn.Conv2d(features, out_channels, kernel_size=1)
+
+    def _get_skip_features(self, enc_high, enc_low):
+        """
+        Combine skip connections based on skip_mode.
+
+        Args:
+            enc_high: Features from high-fidelity encoder
+            enc_low: Features from low-fidelity encoder
+
+        Returns:
+            Combined skip features
+        """
+        if self.skip_mode == 'high':
+            return enc_high
+        elif self.skip_mode == 'low':
+            return enc_low
+        elif self.skip_mode == 'both':
+            return torch.cat([enc_high, enc_low], dim=1)
+        elif self.skip_mode == 'avg':
+            return (enc_high + enc_low) / 2.0
+        else:
+            raise ValueError(f"Unknown skip_mode: {self.skip_mode}")
 
     def forward(self, img_high, img_low):
         """
@@ -79,42 +109,45 @@ class LatentDiffUNet(nn.Module):
         Returns:
             Segmentation logits [B, out_channels, H, W]
         """
-        # Encode high-fidelity
+        # ENCODE HIGH-FIDELITY
         enc1_high = self.encoder1_high(img_high)
         enc2_high = self.encoder2_high(self.pool1_high(enc1_high))
         enc3_high = self.encoder3_high(self.pool2_high(enc2_high))
         enc4_high = self.encoder4_high(self.pool3_high(enc3_high))
         pooled_high = self.pool4_high(enc4_high)
 
-        # Encode low-fidelity
+        # ENCODE LOW-FIDELITY
         enc1_low = self.encoder1_low(img_low)
         enc2_low = self.encoder2_low(self.pool1_low(enc1_low))
         enc3_low = self.encoder3_low(self.pool2_low(enc2_low))
         enc4_low = self.encoder4_low(self.pool3_low(enc3_low))
         pooled_low = self.pool4_low(enc4_low)
 
-        # Compute difference in latent space
+        # COMPUTE DIFFERENCE IN LATENT SPACE
         latent_diff = pooled_high - pooled_low
 
-        # Bottleneck processes the difference
+        # BOTTLENECK processes the difference
         bottleneck = self.bottleneck(latent_diff)
 
-        # Shared decoder with skip connections from high-fidelity encoder
-        # (Using high-fidelity skips since that's the "ground truth")
+        # DECODE with configurable skip connections
         dec4 = self.upconv4(bottleneck)
-        dec4 = torch.cat((dec4, enc4_high), dim=1)
+        skip4 = self._get_skip_features(enc4_high, enc4_low)
+        dec4 = torch.cat([dec4, skip4], dim=1)
         dec4 = self.decoder4(dec4)
 
         dec3 = self.upconv3(dec4)
-        dec3 = torch.cat((dec3, enc3_high), dim=1)
+        skip3 = self._get_skip_features(enc3_high, enc3_low)
+        dec3 = torch.cat([dec3, skip3], dim=1)
         dec3 = self.decoder3(dec3)
 
         dec2 = self.upconv2(dec3)
-        dec2 = torch.cat((dec2, enc2_high), dim=1)
+        skip2 = self._get_skip_features(enc2_high, enc2_low)
+        dec2 = torch.cat([dec2, skip2], dim=1)
         dec2 = self.decoder2(dec2)
 
         dec1 = self.upconv1(dec2)
-        dec1 = torch.cat((dec1, enc1_high), dim=1)
+        skip1 = self._get_skip_features(enc1_high, enc1_low)
+        dec1 = torch.cat([dec1, skip1], dim=1)
         dec1 = self.decoder1(dec1)
 
         # Final segmentation (returns logits, no sigmoid)
@@ -123,7 +156,7 @@ class LatentDiffUNet(nn.Module):
         return output
 
     @staticmethod
-    def _make_encoder_block(in_channels, out_channels, name):
+    def _make_block(in_channels, out_channels, name):
         """Create a standard encoder/decoder block"""
         return nn.Sequential(
             OrderedDict([
@@ -137,19 +170,23 @@ class LatentDiffUNet(nn.Module):
         )
 
 
-# Example usage
+# Example usage and testing
 if __name__ == "__main__":
-    # Test model
     batch_size = 4
     img_high = torch.randn(batch_size, 3, 128, 128)
     img_low = torch.randn(batch_size, 3, 128, 128)
 
-    model = LatentDiffUNet(in_channels=3, out_channels=2, init_features=32)
+    print("Testing LatentDiffUNet with different skip modes:\n")
 
-    output = model(img_high, img_low)
+    for skip_mode in ['high', 'low', 'both', 'avg']:
+        model = LatentDiffUNet(in_channels=3, out_channels=2, init_features=32, skip_mode=skip_mode)
+        output = model(img_high, img_low)
 
-    print("LatentDiffUNet Test:")
-    print(f"  Input: high {img_high.shape}, low {img_low.shape}")
-    print(f"  Output: {output.shape}")
-    print(f"  Parameters: {sum(p.numel() for p in model.parameters()):,}")
-    print("\n✓ Model works!")
+        n_params = sum(p.numel() for p in model.parameters())
+
+        print(f"  skip_mode='{skip_mode}':")
+        print(f"    Output shape: {output.shape}")
+        print(f"    Parameters: {n_params:,}")
+        print()
+
+    print("✓ All skip modes work!")
