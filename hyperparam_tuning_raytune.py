@@ -258,15 +258,18 @@ def CDTrainer(config, checkpoint_dir=None):
         gamma=0.5
     )
 
-    # Load checkpoint if resuming
-    if checkpoint_dir:
-        checkpoint_path = os.path.join(checkpoint_dir, "checkpoint.pt")
-        checkpoint = torch.load(checkpoint_path)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        start_epoch = checkpoint["epoch"] + 1
-    else:
-        start_epoch = 0
+    # Load checkpoint if resuming (new Ray Tune API)
+    start_epoch = 0
+    checkpoint = train.get_checkpoint()
+    if checkpoint:
+        import ray.cloudpickle as pickle
+        with checkpoint.as_directory() as checkpoint_dir:
+            checkpoint_path = os.path.join(checkpoint_dir, "checkpoint.pkl")
+            with open(checkpoint_path, 'rb') as f:
+                checkpoint_data = pickle.load(f)
+            model.load_state_dict(checkpoint_data["model_state_dict"])
+            optimizer.load_state_dict(checkpoint_data["optimizer_state_dict"])
+            start_epoch = checkpoint_data["epoch"] + 1
 
     # Training loop
     for epoch in range(start_epoch, Config.MAX_EPOCHS):
@@ -293,15 +296,22 @@ def CDTrainer(config, checkpoint_dir=None):
             "accuracy": val_scores['accuracy'],
         }
 
-        # Save checkpoint
-        checkpoint_data = {
-            "epoch": epoch,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-        }
+        # Save checkpoint to temporary directory (new Ray Tune API)
+        import tempfile
+        import ray.cloudpickle as pickle
 
-        checkpoint = Checkpoint.from_dict(checkpoint_data)
-        train.report(metrics, checkpoint=checkpoint)
+        with tempfile.TemporaryDirectory() as checkpoint_dir:
+            checkpoint_path = os.path.join(checkpoint_dir, "checkpoint.pkl")
+            checkpoint_data = {
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+            }
+            with open(checkpoint_path, 'wb') as f:
+                pickle.dump(checkpoint_data, f)
+
+            checkpoint = Checkpoint.from_directory(checkpoint_dir)
+            train.report(metrics, checkpoint=checkpoint)
 
 
 def main(num_samples=20, max_num_epochs=500, gpus_per_trial=1):
