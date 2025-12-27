@@ -279,18 +279,18 @@ def CDTrainer(config, checkpoint_dir=None):
         # Step scheduler
         scheduler.step()
 
-        # Calculate mean F1 score
-        f1_mean = np.mean([val_scores['f1_score'][i] for i in range(1, Config.N_CLASSES)])
+        # Calculate mean F1 score (excluding background class)
+        f1_per_class = val_scores['f1_per_class']
+        f1_mean = np.mean(f1_per_class[1:]) if Config.N_CLASSES > 1 else f1_per_class[0]
 
         # Report metrics to Ray Tune
         metrics = {
             "loss": val_loss,
             "f1": f1_mean,
-            "f1_1": val_scores['f1_score'][1] if Config.N_CLASSES > 1 else 0.0,
-            "f1_2": val_scores['f1_score'][1] if Config.N_CLASSES > 1 else 0.0,  # Same as f1_1 for binary
-            "iou": val_scores['iou'][1] if Config.N_CLASSES > 1 else 0.0,
-            "precision": val_scores['precision'][1] if Config.N_CLASSES > 1 else 0.0,
-            "recall": val_scores['recall'][1] if Config.N_CLASSES > 1 else 0.0,
+            "f1_nuclei": f1_per_class[1] if Config.N_CLASSES > 1 else 0.0,
+            "precision": val_scores['precision_per_class'][1] if Config.N_CLASSES > 1 else 0.0,
+            "recall": val_scores['recall_per_class'][1] if Config.N_CLASSES > 1 else 0.0,
+            "accuracy": val_scores['accuracy'],
         }
 
         # Save checkpoint
@@ -373,10 +373,11 @@ def main(num_samples=20, max_num_epochs=500, gpus_per_trial=1):
     print("=" * 80)
     print(f"Best trial config: {best_trial.config}")
     print(f"Best trial final validation loss: {best_trial.metrics['loss']:.4f}")
-    print(f"Best trial final validation F1: {best_trial.metrics['f1']:.4f}")
-    print(f"Best trial final validation IoU: {best_trial.metrics['iou']:.4f}")
+    print(f"Best trial final validation F1 (mean): {best_trial.metrics['f1']:.4f}")
+    print(f"Best trial final validation F1 (nuclei): {best_trial.metrics['f1_nuclei']:.4f}")
     print(f"Best trial final validation Precision: {best_trial.metrics['precision']:.4f}")
     print(f"Best trial final validation Recall: {best_trial.metrics['recall']:.4f}")
+    print(f"Best trial final validation Accuracy: {best_trial.metrics['accuracy']:.4f}")
 
     # Save best hyperparameters
     output_file = Config.BASE_DIR / f'best_hyperparams_{Config.DATASET}_{MODEL_TYPE}_raytune.json'
@@ -387,10 +388,11 @@ def main(num_samples=20, max_num_epochs=500, gpus_per_trial=1):
             'best_config': best_trial.config,
             'best_metrics': {
                 'loss': best_trial.metrics['loss'],
-                'f1': best_trial.metrics['f1'],
-                'iou': best_trial.metrics['iou'],
+                'f1_mean': best_trial.metrics['f1'],
+                'f1_nuclei': best_trial.metrics['f1_nuclei'],
                 'precision': best_trial.metrics['precision'],
                 'recall': best_trial.metrics['recall'],
+                'accuracy': best_trial.metrics['accuracy'],
             }
         }, f, indent=4)
 
