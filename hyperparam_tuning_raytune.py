@@ -351,7 +351,6 @@ def main(num_samples=20, max_num_epochs=500, gpus_per_trial=1):
             storage_path=str(Config.OUTPUT_DIR),
             name=f"{MODEL_TYPE}_{Config.DATASET}",
             checkpoint_config=train.CheckpointConfig(
-                checkpoint_at_end=False,
                 checkpoint_score_attribute="f1",
                 num_to_keep=2,
             ),
