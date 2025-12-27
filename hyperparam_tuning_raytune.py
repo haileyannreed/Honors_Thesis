@@ -210,14 +210,14 @@ def CDTrainer(config, checkpoint_dir=None):
 
     # Create datasets
     train_dataset = NucleiDataset(
-        high_fidelity_dir=Config.HIGH_TRAIN,
-        low_fidelity_dir=Config.LOW_TRAIN,
+        high_dir=Config.HIGH_TRAIN,
+        low_dir=Config.LOW_TRAIN,
         mask_dir=Config.MASK_TRAIN
     )
 
     test_dataset = NucleiDataset(
-        high_fidelity_dir=Config.HIGH_TEST,
-        low_fidelity_dir=Config.LOW_TEST,
+        high_dir=Config.HIGH_TEST,
+        low_dir=Config.LOW_TEST,
         mask_dir=Config.MASK_TEST
     )
 
