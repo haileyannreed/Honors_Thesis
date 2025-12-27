@@ -20,6 +20,7 @@ import ray
 from ray import tune, train
 from ray.train import Checkpoint
 from ray.tune.schedulers import ASHAScheduler
+from ray.tune.logger import TBXLoggerCallback
 from functools import partial
 
 from datasets.nuclei_dataset import NucleiDataset
@@ -350,6 +351,7 @@ def main(num_samples=20, max_num_epochs=500, gpus_per_trial=1):
         run_config=tune.RunConfig(
             storage_path=str(Config.OUTPUT_DIR),
             name=f"{MODEL_TYPE}_{Config.DATASET}",
+            callbacks=[TBXLoggerCallback()],
         ),
     )
 
