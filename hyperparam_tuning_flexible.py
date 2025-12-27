@@ -54,7 +54,7 @@ class Config:
 
     # Model settings
     IN_CHANNELS = 3
-    OUT_CHANNELS = 2
+    OUT_CHANNELS = 3  # Changed from 2 to match conv_layer input in semi_siamese
     INIT_FEATURES = 32
     N_CLASSES = 2
 
