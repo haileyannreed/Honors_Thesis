@@ -258,18 +258,8 @@ def CDTrainer(config, checkpoint_dir=None):
         gamma=0.5
     )
 
-    # Load checkpoint if resuming (new Ray Tune API)
+    # Start training from scratch (Ray Tune handles checkpointing automatically)
     start_epoch = 0
-    checkpoint = train.get_checkpoint()
-    if checkpoint:
-        import ray.cloudpickle as pickle
-        with checkpoint.as_directory() as checkpoint_dir:
-            checkpoint_path = os.path.join(checkpoint_dir, "checkpoint.pkl")
-            with open(checkpoint_path, 'rb') as f:
-                checkpoint_data = pickle.load(f)
-            model.load_state_dict(checkpoint_data["model_state_dict"])
-            optimizer.load_state_dict(checkpoint_data["optimizer_state_dict"])
-            start_epoch = checkpoint_data["epoch"] + 1
 
     # Training loop
     for epoch in range(start_epoch, Config.MAX_EPOCHS):
