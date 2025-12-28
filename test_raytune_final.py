@@ -293,14 +293,14 @@ scheduler = ASHAScheduler(
 )
 
 print("\nStarting Ray Tune test (4 trials, 3 epochs each)...")
-print("This will test PARALLEL execution with GPUS_PER_TRIAL=0.25")
+print("This will test PARALLEL execution with GPUS_PER_TRIAL=0.5 (2 trials at a time)")
 print()
 
 try:
     tuner = tune.Tuner(
         tune.with_resources(
             test_trainable,
-            resources={"cpu": 1, "gpu": 0.25}  # 4 parallel trials
+            resources={"cpu": 1, "gpu": 0.5}  # 2 parallel trials
         ),
         tune_config=tune.TuneConfig(
             scheduler=scheduler,
