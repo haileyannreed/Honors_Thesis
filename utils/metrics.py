@@ -6,8 +6,34 @@ class MetricTracker:
         self.confusion_matrix = np.zeros((n_classes, n_classes), dtype=np.int64)
 
     def update(self, pred, gt):
-        """Update confusion matrix"""
-        for p, g in zip(pred.flatten(), gt.flatten()):
+        """
+        Update confusion matrix
+
+        CRITICAL: For performance, always pass NUMPY ARRAYS, not GPU tensors!
+
+        Args:
+            pred: Predicted class labels as numpy array (already argmax'd) OR torch tensor
+            gt: Ground truth class labels as numpy array OR torch tensor
+        """
+        import torch
+
+        # Convert to numpy if torch tensors (for compatibility)
+        # But for best performance, pass numpy arrays directly!
+        if isinstance(pred, torch.Tensor):
+            if pred.dim() == 4:  # [B, C, H, W] - logits
+                pred = torch.argmax(pred, dim=1)  # [B, H, W]
+            pred = pred.cpu().numpy()
+
+        if isinstance(gt, torch.Tensor):
+            gt = gt.cpu().numpy()
+
+        # Flatten arrays
+        pred = pred.flatten()
+        gt = gt.flatten()
+
+        # Update confusion matrix element-wise
+        # This is fast because we're iterating over numpy arrays, NOT GPU tensors
+        for p, g in zip(pred, gt):
             if 0 <= p < self.n_classes and 0 <= g < self.n_classes:
                 self.confusion_matrix[int(g), int(p)] += 1
 
