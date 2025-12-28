@@ -108,13 +108,14 @@ def get_alpha(dataloader):
     return z
 
 
-def train_epoch(model, dataloader, optimizer, criterion, device):
+def train_epoch(model, dataloader, optimizer, criterion, device, trial_num=0, epoch_num=0):
     """Train for one epoch - ALIGNED WITH PAPER"""
+    import sys
     model.train()
     running_loss = 0.0
     metric_tracker = MetricTracker(n_classes=Config.N_CLASSES)
 
-    for batch in dataloader:
+    for batch_idx, batch in enumerate(dataloader):
         img_high = batch['A'].to(device)
         img_low = batch['B'].to(device)
         mask = batch['L'].to(device)
@@ -130,6 +131,10 @@ def train_epoch(model, dataloader, optimizer, criterion, device):
         # KEY: Convert to CPU numpy BEFORE updating metrics (like paper does)
         pred_classes = torch.argmax(pred.detach(), dim=1)
         metric_tracker.update(pred_classes.cpu().numpy(), mask.detach().cpu().numpy())
+
+        if (batch_idx + 1) % 30 == 0:
+            print(f"[Trial {trial_num}] Epoch {epoch_num}: batch {batch_idx+1}/{len(dataloader)}, loss={loss.item():.4f}", flush=True)
+            sys.stdout.flush()
 
     epoch_loss = running_loss / len(dataloader)
     scores = metric_tracker.get_scores()
@@ -280,7 +285,7 @@ def objective(trial):
 
     for epoch in range(Config.MAX_EPOCHS):
         # Train
-        train_loss, train_scores = train_epoch(model, train_loader, optimizer, criterion, device)
+        train_loss, train_scores = train_epoch(model, train_loader, optimizer, criterion, device, trial.number, epoch)
 
         # Validate
         val_loss, val_scores = validate(model, test_loader, criterion, device)
