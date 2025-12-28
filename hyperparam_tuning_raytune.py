@@ -20,11 +20,9 @@ from pathlib import Path
 import json
 
 import ray
-from ray import tune, train
-from ray.train import Checkpoint
+from ray import tune
 from ray.tune.schedulers import ASHAScheduler
 from ray.tune.logger import TBXLoggerCallback
-from functools import partial
 
 from datasets.nuclei_dataset import NucleiDataset
 from utils.metrics import MetricTracker
@@ -185,7 +183,7 @@ def calculate_class_weights(dataloader, device):
     return alpha
 
 
-def CDTrainer(config, checkpoint_dir=None):
+def CDTrainer(config):
     """
     Ray Tune training function
     Follows the paper's training approach
@@ -301,24 +299,8 @@ def CDTrainer(config, checkpoint_dir=None):
             "accuracy": val_scores['accuracy'],
         }
 
-        # Save checkpoint to temporary directory (Ray Tune API)
-        import tempfile
-        import ray.cloudpickle as pickle
-
-        with tempfile.TemporaryDirectory() as checkpoint_dir:
-            checkpoint_path = os.path.join(checkpoint_dir, "checkpoint.pkl")
-            checkpoint_data = {
-                "epoch": epoch,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-            }
-            with open(checkpoint_path, 'wb') as f:
-                pickle.dump(checkpoint_data, f)
-
-            checkpoint = Checkpoint.from_directory(checkpoint_dir)
-            # Use tune.report instead of train.report when called from Ray Tune
-            # In Ray 2.x, pass metrics as keyword arguments
-            tune.report(checkpoint=checkpoint, **metrics)
+        # Report metrics to Ray Tune (without checkpointing for now - debugging)
+        tune.report(**metrics)
 
 
 def main(num_samples=20, max_num_epochs=500, gpus_per_trial=1):
