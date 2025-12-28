@@ -322,7 +322,8 @@ def CDTrainer(config, checkpoint_dir=None):
 
             checkpoint = Checkpoint.from_directory(checkpoint_dir)
             # Use tune.report instead of train.report when called from Ray Tune
-            tune.report(metrics, checkpoint=checkpoint)
+            # In Ray 2.x, pass metrics as keyword arguments
+            tune.report(checkpoint=checkpoint, **metrics)
 
 
 def main(num_samples=20, max_num_epochs=500, gpus_per_trial=1):
