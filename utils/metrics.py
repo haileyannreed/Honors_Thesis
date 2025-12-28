@@ -7,9 +7,7 @@ class MetricTracker:
 
     def update(self, pred, gt):
         """
-        Update confusion matrix
-
-        CRITICAL: For performance, always pass NUMPY ARRAYS, not GPU tensors!
+        Update confusion matrix - FULLY VECTORIZED (no loops!)
 
         Args:
             pred: Predicted class labels as numpy array (already argmax'd) OR torch tensor
@@ -17,8 +15,7 @@ class MetricTracker:
         """
         import torch
 
-        # Convert to numpy if torch tensors (for compatibility)
-        # But for best performance, pass numpy arrays directly!
+        # Convert to numpy if torch tensors
         if isinstance(pred, torch.Tensor):
             if pred.dim() == 4:  # [B, C, H, W] - logits
                 pred = torch.argmax(pred, dim=1)  # [B, H, W]
@@ -28,14 +25,19 @@ class MetricTracker:
             gt = gt.cpu().numpy()
 
         # Flatten arrays
-        pred = pred.flatten()
-        gt = gt.flatten()
+        pred = pred.flatten().astype(np.int64)
+        gt = gt.flatten().astype(np.int64)
 
-        # Update confusion matrix element-wise
-        # This is fast because we're iterating over numpy arrays, NOT GPU tensors
-        for p, g in zip(pred, gt):
-            if 0 <= p < self.n_classes and 0 <= g < self.n_classes:
-                self.confusion_matrix[int(g), int(p)] += 1
+        # Filter valid indices
+        valid_mask = (pred >= 0) & (pred < self.n_classes) & (gt >= 0) & (gt < self.n_classes)
+        pred = pred[valid_mask]
+        gt = gt[valid_mask]
+
+        # VECTORIZED confusion matrix update using np.bincount
+        # This is 100-1000x faster than looping!
+        indices = self.n_classes * gt + pred
+        bincount = np.bincount(indices, minlength=self.n_classes**2)
+        self.confusion_matrix += bincount.reshape(self.n_classes, self.n_classes)
 
     def get_scores(self):
         """Calculate metrics from confusion matrix"""
