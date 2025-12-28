@@ -246,12 +246,14 @@ def CDTrainer(config, checkpoint_dir=None):
         num_workers=0
     )
 
-    # Get pre-calculated class weights from config
-    # (calculated once in main() to avoid GPU contention with parallel trials)
-    alpha = config.get('alpha', None)
-    if alpha is None:
-        # Fallback: calculate if not provided (shouldn't happen)
-        alpha = calculate_class_weights(train_loader, device)
+    # Calculate class weights on CPU to avoid GPU contention
+    # Each worker calculates independently to avoid serialization issues
+    class_counts = torch.zeros(Config.N_CLASSES)
+    for batch in train_loader:
+        mask = batch['L']
+        for c in range(Config.N_CLASSES):
+            class_counts[c] += (mask == c).sum()
+    alpha = class_counts.numpy()
 
     # Setup loss function and optimizer (matching paper's approach)
     # CRITICAL: Must pass apply_nonlin=softmax_helper to apply softmax to raw logits!
