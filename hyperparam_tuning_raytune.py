@@ -63,7 +63,7 @@ class Config:
     NUM_SAMPLES = 20  # Number of trials
     MAX_EPOCHS = 500  # Max epochs per trial
     GRACE_PERIOD = 10  # Reduced from 15 for faster pruning
-    GPUS_PER_TRIAL = 0.25  # Run 4 trials in parallel on 1 GPU
+    GPUS_PER_TRIAL = 1.0  # Run trials SEQUENTIALLY (GPU thrashes with parallel - 0.60x speedup per test_gpu_parallelism.py)
 
     # Output
     OUTPUT_DIR = BASE_DIR / 'ray_tune_results'
