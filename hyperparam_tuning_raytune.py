@@ -1,9 +1,12 @@
 """
 Hyperparameter tuning script using Ray Tune (following paper's approach)
-Supports: Semi-Siamese, ConcatUNet, DiffUNet, LatentDiffUNet
+Supports: Semi-Siamese, FlexibleUNet (concat/diff), LatentDiffUNet
 
 Usage:
-    Change MODEL_TYPE to test different architectures
+    Change MODEL_TYPE to test different architectures:
+    - 'semi_siamese': Baseline Semi-Siamese architecture
+    - 'flexible_unet': Tunes both concat and diff fusion modes
+    - 'latent_diff': Tunes all 4 skip connection modes (high/low/both/avg)
 """
 
 import numpy as np
@@ -25,18 +28,15 @@ from functools import partial
 
 from datasets.nuclei_dataset import NucleiDataset
 from utils.metrics import MetricTracker
-from models.losses import DiceLoss, FocalLoss
+from models.losses import DiceLoss, FocalLoss, softmax_helper  # DiceLoss used in combined loss
 
 # Import all model architectures
 from models.semi_siamese import Semi_siamese_
-from models.flexible_unet import ConcatUNet, DiffUNet
+from models.flexible_unet import ConcatUNet, DiffUNet, FlexibleUNet
 from models.latent_diff_unet import LatentDiffUNet
 
 
-# ============= CHANGE THIS TO TEST DIFFERENT MODELS =============
 MODEL_TYPE = 'semi_siamese'  # Options: 'semi_siamese', 'concat_unet', 'diff_unet', 'latent_diff'
-# =================================================================
-
 
 # Configuration
 class Config:
@@ -63,9 +63,9 @@ class Config:
 
     # Ray Tune settings
     NUM_SAMPLES = 20  # Number of trials
-    MAX_EPOCHS = 500
-    GRACE_PERIOD = 15  # Train each trial at least for n epochs
-    GPUS_PER_TRIAL = 1
+    MAX_EPOCHS = 500  # Max epochs per trial
+    GRACE_PERIOD = 10  # Reduced from 15 for faster pruning
+    GPUS_PER_TRIAL = 0.25  # Run 4 trials in parallel on 1 GPU
 
     # Output
     OUTPUT_DIR = BASE_DIR / 'ray_tune_results'
@@ -75,8 +75,8 @@ class Config:
 torch.use_deterministic_algorithms(True)
 
 
-def get_model(model_type, skip_mode='high'):
-    """Get model based on type and skip_mode (for latent_diff)"""
+def get_model(model_type, skip_mode='high', fusion_mode='concat'):
+    """Get model based on type, skip_mode (for latent_diff), and fusion_mode (for flexible_unet)"""
     if model_type == 'semi_siamese':
         return Semi_siamese_(
             in_channels=Config.IN_CHANNELS,
@@ -90,6 +90,12 @@ def get_model(model_type, skip_mode='high'):
         )
     elif model_type == 'diff_unet':
         return DiffUNet(
+            out_channels=Config.N_CLASSES,
+            init_features=Config.INIT_FEATURES
+        )
+    elif model_type == 'flexible_unet':
+        return FlexibleUNet(
+            fusion_mode=fusion_mode,
             out_channels=Config.N_CLASSES,
             init_features=Config.INIT_FEATURES
         )
@@ -161,7 +167,7 @@ def validate(model, dataloader, criterion, device):
 
 
 def calculate_class_weights(dataloader, device):
-    """Calculate class weights from training data"""
+    """Calculate class weights from training data (matching paper's get_alpha)"""
     print("Calculating class weights from training data...")
     class_counts = torch.zeros(Config.N_CLASSES, device=device)
 
@@ -170,14 +176,13 @@ def calculate_class_weights(dataloader, device):
         for c in range(Config.N_CLASSES):
             class_counts[c] += (mask == c).sum()
 
-    total_pixels = class_counts.sum()
-    class_weights = total_pixels / (Config.N_CLASSES * class_counts)
-    alpha = class_weights / class_weights.sum()
+    # Return RAW pixel counts (not normalized) - FocalLoss will normalize internally
+    alpha = class_counts.cpu().numpy()
 
-    for i, a in enumerate(alpha):
-        print(f"alpha-{i} {'(background)' if i == 0 else '(nuclei)'}={a:.4f}")
+    for i, count in enumerate(alpha):
+        print(f"alpha-{i} {'(background)' if i == 0 else '(nuclei)'}={count:.0f} pixels")
 
-    return alpha.cpu().numpy()
+    return alpha
 
 
 def CDTrainer(config, checkpoint_dir=None):
@@ -199,9 +204,10 @@ def CDTrainer(config, checkpoint_dir=None):
     gen = torch.Generator()
     gen.manual_seed(seed)
 
-    # Get model with skip_mode if needed
+    # Get model with skip_mode and fusion_mode if needed
     skip_mode = config.get('skip_mode', 'high')
-    model = get_model(MODEL_TYPE, skip_mode=skip_mode)
+    fusion_mode = config.get('fusion_mode', 'concat')
+    model = get_model(MODEL_TYPE, skip_mode=skip_mode, fusion_mode=fusion_mode)
 
     # Setup device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -223,11 +229,12 @@ def CDTrainer(config, checkpoint_dir=None):
     )
 
     # Create dataloaders
+    # Use num_workers=0 for parallel trials to avoid CPU contention
     train_loader = DataLoader(
         train_dataset,
         batch_size=config['batch_size'],
         shuffle=True,
-        num_workers=4,
+        num_workers=0,
         worker_init_fn=seed_worker,
         generator=gen
     )
@@ -236,14 +243,25 @@ def CDTrainer(config, checkpoint_dir=None):
         test_dataset,
         batch_size=config['batch_size'],
         shuffle=False,
-        num_workers=4
+        num_workers=0
     )
 
-    # Calculate class weights
-    alpha = calculate_class_weights(train_loader, device)
+    # Get pre-calculated class weights from config
+    # (calculated once in main() to avoid GPU contention with parallel trials)
+    alpha = config.get('alpha', None)
+    if alpha is None:
+        # Fallback: calculate if not provided (shouldn't happen)
+        alpha = calculate_class_weights(train_loader, device)
 
-    # Setup loss function and optimizer
-    criterion = FocalLoss(alpha=alpha, gamma=2)
+    # Setup loss function and optimizer (matching paper's approach)
+    # CRITICAL: Must pass apply_nonlin=softmax_helper to apply softmax to raw logits!
+    focal_loss = FocalLoss(apply_nonlin=softmax_helper, alpha=alpha, gamma=2, smooth=1e-5)
+    dice_loss = DiceLoss(n_classes=Config.N_CLASSES)
+
+    def criterion(pred, mask):
+        return focal_loss(pred, mask) + dice_loss(pred, mask)
+
+    # same as in train_semi_ray.py
     optimizer = optim.AdamW(
         model.parameters(),
         lr=config['lr'],
@@ -251,7 +269,7 @@ def CDTrainer(config, checkpoint_dir=None):
         weight_decay=config['wd']
     )
 
-    # Learning rate scheduler
+    # Learning rate scheduler --> nonlinear (a bit faster than train_semi_ray)
     scheduler = optim.lr_scheduler.StepLR(
         optimizer,
         step_size=100,
@@ -313,20 +331,45 @@ def main(num_samples=20, max_num_epochs=500, gpus_per_trial=1):
     os.environ["RAY_TMPDIR"] = "/tmp/ray_tmp"
     ray.init(_temp_dir="/tmp/ray_tmp", ignore_reinit_error=True)
 
-    # Define search space
+    # Calculate class weights ONCE before starting trials
+    # This avoids GPU contention from 4 trials all calculating simultaneously
+    print("Pre-calculating class weights...")
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    temp_dataset = NucleiDataset(
+        high_dir=Config.HIGH_TRAIN,
+        low_dir=Config.LOW_TRAIN,
+        mask_dir=Config.MASK_TRAIN
+    )
+    temp_loader = DataLoader(temp_dataset, batch_size=16, shuffle=False, num_workers=0)
+    alpha = calculate_class_weights(temp_loader, device)
+    alpha_list = alpha.tolist()  # Convert to list for Ray Tune config
+    print(f"Class weights calculated: {alpha_list}")
+
+    # Define search space (NARROWED based on paper's best results)
     if MODEL_TYPE == 'latent_diff':
         # Add skip_mode tuning for latent_diff
         config = {
-            "lr": tune.loguniform(1e-5, 1e-2),
-            "wd": tune.loguniform(1e-6, 1e-2),
-            "batch_size": tune.choice([4, 8, 16]),
+            "lr": tune.loguniform(2e-4, 8e-4),  # NARROWED: Focus on optimal range
+            "wd": tune.loguniform(1e-6, 1e-4),  # NARROWED: Avoid over-regularization
+            "batch_size": tune.choice([16]),     # FIXED: Use optimal batch size only
             "skip_mode": tune.choice(['high', 'low', 'both', 'avg']),
+            "alpha": alpha_list,  # Pre-calculated class weights
+        }
+    elif MODEL_TYPE == 'flexible_unet':
+        # Add fusion_mode tuning for flexible_unet
+        config = {
+            "lr": tune.loguniform(2e-4, 8e-4),  # NARROWED: Focus on optimal range
+            "wd": tune.loguniform(1e-6, 1e-4),  # NARROWED: Avoid over-regularization
+            "batch_size": tune.choice([16]),     # FIXED: Use optimal batch size only
+            "fusion_mode": tune.choice(['concat', 'diff']),
+            "alpha": alpha_list,  # Pre-calculated class weights
         }
     else:
         config = {
-            "lr": tune.loguniform(1e-5, 1e-2),
-            "wd": tune.loguniform(1e-6, 1e-2),
-            "batch_size": tune.choice([4, 8, 16]),
+            "lr": tune.loguniform(2e-4, 8e-4),  # NARROWED: Focus on optimal range (paper's best: 3.6e-4)
+            "wd": tune.loguniform(1e-6, 1e-4),  # NARROWED: Avoid over-regularization (paper's best: 1.4e-6)
+            "batch_size": tune.choice([16]),     # FIXED: Use optimal batch size only (skip slow 4 and 8)
+            "alpha": alpha_list,  # Pre-calculated class weights
         }
 
     # ASHA scheduler (early stopping)
@@ -342,7 +385,7 @@ def main(num_samples=20, max_num_epochs=500, gpus_per_trial=1):
     tuner = tune.Tuner(
         tune.with_resources(
             CDTrainer,
-            resources={"cpu": 4, "gpu": gpus_per_trial}
+            resources={"cpu": 1, "gpu": gpus_per_trial}  # Reduced CPU to allow 4 parallel trials
         ),
         tune_config=tune.TuneConfig(
             scheduler=scheduler,
