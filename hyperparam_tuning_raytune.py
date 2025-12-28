@@ -72,7 +72,7 @@ class Config:
     OUTPUT_DIR.mkdir(exist_ok=True)
 
 
-torch.use_deterministic_algorithms(True)
+# torch.use_deterministic_algorithms(True)  # DISABLED: Can cause extreme slowdowns/hangs
 
 
 def get_model(model_type, skip_mode='high', fusion_mode='concat'):
